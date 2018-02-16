@@ -45,6 +45,8 @@ tf.flags.DEFINE_integer('eval_size', 10000, 'Size of the test dataset.')
 tf.flags.DEFINE_integer('batch_size', 128, 'Size of a batch.')
 tf.flags.DEFINE_integer('image_height', 24, 'Image height.')
 tf.flags.DEFINE_integer('image_width', 56, 'Image width.')
+tf.flags.DEFINE_integer('file_start', 1, 'Image width.')
+tf.flags.DEFINE_integer('file_end', 110, 'Image width.')
 tf.flags.DEFINE_string('hparams_override', None,
                        'A string of form key=value,key=value to override the'
                        'hparams of this experiment.')
@@ -116,7 +118,9 @@ def get_features(split, total_batch_size, num_gpus, data_dir, num_targets,
                 batch_size=batch_size,
                 image_height=FLAGS.image_height,
                 image_width=FLAGS.image_width,
-                num_targets=num_targets
+                num_targets=num_targets,
+                file_start=FLAGS.file_start,
+                file_end=FLAGS.file_end
             ))
       elif dataset == 'norb':
         features.append(
@@ -235,11 +239,9 @@ def eval_experiment(session, result, writer, last_step, max_steps, **kwargs):
   """
   del kwargs
 
-  total_correct = 0
-  total_almost = 0
-  total_targets = []
-  total_predictions = []
-  for _ in range(max_steps):
+  smooth = 1.0
+  total_dices = []
+  for step in range(max_steps):
     # summary_i, correct, almost = session.run(
     #     [result.summary, result.correct, result.almost])
     batch_targets, batch_predictions = session.run([result.targets, result.predictions])
@@ -248,37 +250,41 @@ def eval_experiment(session, result, writer, last_step, max_steps, **kwargs):
     batch_size = batch_targets.shape[1]
     height = batch_targets.shape[2]
     width = batch_targets.shape[3]
-    total_targets.append(batch_targets.reshape(batch_size, height, width))
-    total_predictions.append(batch_predictions.reshape(batch_size, height, width))
 
-  targets = np.array([]).reshape(0, height, width)
-  for i in range(len(total_targets)):
-    targets = np.vstack((targets, total_targets[i]))
-  predictions = np.array([]).reshape(0, height, width)
-  for i in range(len(total_predictions)):
-    predictions = np.vstack((predictions, total_predictions[i]))
+    import nibabel as nib
+    target_nii = nib.Nifti1Image(np.reshape(batch_targets, (batch_size, height, width)), np.eye(4))
+    prediction_nii = nib.Nifti1Image(np.reshape(batch_predictions, (batch_size, height, width)), np.eye(4))
+    nib.save(target_nii, os.path.join(FLAGS.data_dir, 't_' + str(step) + '.nii.gz'))
+    nib.save(prediction_nii, os.path.join(FLAGS.data_dir, 'p_' + str(step) + '.nii.gz'))
 
-  print("targets shape:" + str(targets.shape))
-  print("predictions shape:" + str(predictions.shape))
+    batch_intersection = 0.0
+    batch_union = 0.0
+    for i in range(batch_targets.shape[0]):
+        if step != 21:
+            # print("targets[i] shape" + str(targets[i].shape))
+            # print("predictions[i] shape" + str(predictions[i].shape))
+            target = batch_targets[i].flatten()
+            prediction = batch_predictions[i].flatten()
+            intersection = np.sum(np.multiply(target, prediction))
+            batch_intersection += intersection
+            # print("positive_target_indices shape:" + str(positive_target_indices))
+            # print("positive_pred_indices shape:" + str(positive_pred_indices))
+            union = np.sum(target) + np.sum(intersection)
+            batch_union += union
 
-  smooth = 1.0
-  dices = []
-  for i in range(targets.shape[0]):
-      # print("targets[i] shape" + str(targets[i].shape))
-      # print("predictions[i] shape" + str(predictions[i].shape))
-      target = targets[i].flatten()
-      prediction = predictions[i].flatten()
-      intersection = np.sum(np.multiply(target, prediction))
-      # print("positive_target_indices shape:" + str(positive_target_indices))
-      # print("positive_pred_indices shape:" + str(positive_pred_indices))
-      dice = (2.0 * intersection + smooth) / (np.sum(target) + np.sum(intersection) + smooth)
-      print(dice)
-      dices.append(dice)
 
-  print('mean dices:' + str(np.mean(dices)))
-  for i in range(10):
-    scipy.misc.imsave(FLAGS.data_dir + '/t_' + str(i) + '.jpg', targets[i])
-    scipy.misc.imsave(FLAGS.data_dir + '/p_' + str(i) + '.jpg', predictions[i])
+    batch_dice = (2.0 * batch_intersection + smooth) / (batch_union + smooth)
+    total_dices.append(batch_dice)
+    # print("batch_targets shape:" + str(batch_targets.shape))
+    # print("batch_predictions shape:" + str(batch_predictions.shape))
+    print("batch_dic:" + str(batch_dice))
+
+
+  print('\nmean dices:' + str(np.mean(total_dices)))
+  print('dices std:' + str(np.std(total_dices)))
+  # for i in range(10):
+  #   scipy.misc.imsave(FLAGS.data_dir + '/t_' + str(i) + '.jpg', targets[i])
+  #   scipy.misc.imsave(FLAGS.data_dir + '/p_' + str(i) + '.jpg', predictions[i])
 
   # total_false = max_steps * 100 - total_correct
   # total_almost_false = max_steps * 100 - total_almost
@@ -433,7 +439,7 @@ def evaluate(hparams, summary_dir, num_gpus, model_type, eval_size, data_dir,
   load_dir = summary_dir + '/train/'
   summary_dir += '/test/'
   with tf.Graph().as_default():
-    features = get_features('test', 100, num_gpus, data_dir, num_targets,
+    features = get_features('test', FLAGS.batch_size, num_gpus, data_dir, num_targets,
                             dataset, validate)
     model = models[model_type](hparams)
     result, _ = model.multi_gpu(features, num_gpus)
@@ -454,7 +460,7 @@ def evaluate(hparams, summary_dir, num_gpus, model_type, eval_size, data_dir,
         paused = 0
         seen_step = step
         run_experiment(load_eval, last_checkpoint, test_writer, eval_experiment,
-                       result, eval_size // 100)
+                       result, eval_size // FLAGS.batch_size)
         if checkpoint:
           break
 

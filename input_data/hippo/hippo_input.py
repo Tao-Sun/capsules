@@ -85,7 +85,7 @@ def read_and_decode(filename_queue, image_height, image_width):
     return image, label, recons_label
 
 
-def inputs(split, data_dir, batch_size, image_height, image_width, num_targets, num_epochs=None):
+def inputs(split, data_dir, batch_size, image_height, image_width, num_targets, file_start, file_end):
     """Reads input data num_epochs times.
 
     Args:
@@ -103,17 +103,19 @@ def inputs(split, data_dir, batch_size, image_height, image_width, num_targets, 
       Note that an tf.train.QueueRunner is added to the graph, which
       must be run using e.g. tf.train.start_queue_runners().
     """
-    if not num_epochs:
-        num_epochs = None
 
+    file_num = file_end - file_start + 1
     if split == 'train':
-        file_names = [os.path.join(data_dir, 'train.tfrecords')]
+        file_names = [os.path.join(data_dir, str(i) + '.tfrecords') for i in range(1, int(0.8 * file_num))]
     elif split == 'test':
-        file_names = [os.path.join(data_dir, 'test.tfrecords')]
+        file_names = [os.path.join(data_dir, str(i) + '.tfrecords') for i in range(int(0.8 * file_num), file_end + 1)]
 
     with tf.name_scope('input'):
-        filename_queue = tf.train.string_input_producer(
-            file_names, shuffle=True, num_epochs=num_epochs)
+        if split == 'train':
+            shuffle = True
+        elif split == 'test':
+            shuffle = False
+        filename_queue = tf.train.string_input_producer(file_names, shuffle=shuffle)
 
         # Even when reading in multiple threads, share the filename
         # queue.
@@ -126,14 +128,22 @@ def inputs(split, data_dir, batch_size, image_height, image_width, num_targets, 
             'recons_image': label
         }
 
-        # Shuffle the examples and collect them into batch_size batches.
-        # (Internally uses a RandomShuffleQueue.)
-        # We run this in two threads to avoid being a bottleneck.
-        batched_features = tf.train.shuffle_batch(
-            features, batch_size=batch_size, num_threads=2,
-            capacity=1000 + 3 * batch_size,
-            # Ensures a minimum amount of shuffling of examples.
-            min_after_dequeue=1000)
+        if split == 'train':
+            # Shuffle the examples and collect them into batch_size batches.
+            # (Internally uses a RandomShuffleQueue.)
+            # We run this in two threads to avoid being a bottleneck.
+            batched_features = tf.train.shuffle_batch(
+                features, batch_size=batch_size, num_threads=2,
+                capacity=1000 + 3 * batch_size,
+                # Ensures a minimum amount of shuffling of examples.
+                min_after_dequeue=1000)
+        elif split == 'test':
+            batched_features = tf.train.batch(
+                features, batch_size=batch_size,
+                num_threads=2,
+                capacity=1000 + 3 * batch_size)
+
+
 
         batched_features['height'] = image_height
         batched_features['width'] = image_width

@@ -444,29 +444,104 @@ def reconstruction(capsule_mask, num_atoms, capsule_embedding, layer_sizes,
   Returns:
     The reconstruction images of shape [batch_size, num_pixels].
   """
-  first_layer_size, second_layer_size = layer_sizes
+  first_layer_size = layer_sizes[0]
   capsule_mask_3d = tf.expand_dims(capsule_mask, -1)
   atom_mask = tf.tile(capsule_mask_3d, [1, 1, num_atoms])
   filtered_embedding = capsule_embedding * atom_mask
   filtered_embedding_2d = tf.contrib.layers.flatten(filtered_embedding)
   print(filtered_embedding_2d.get_shape())
-  recons_2d_logits = tf.contrib.layers.stack(
+  fc_logits = tf.contrib.layers.stack(
       inputs=filtered_embedding_2d,
       layer=tf.contrib.layers.fully_connected,
-      stack_args=[(first_layer_size, tf.nn.relu),
-                  (second_layer_size, tf.nn.relu),
-                  (num_pixels, None)],
+      stack_args=[(first_layer_size, tf.nn.relu)],
       reuse=reuse,
-      scope='recons',
+      scope='fc',
       weights_initializer=tf.truncated_normal_initializer(
           stddev=0.1, dtype=tf.float32),
       biases_initializer=tf.constant_initializer(0.1))
-  reconstruction_2d = tf.sigmoid(recons_2d_logits)
+  fc_logits = tf.reshape(fc_logits, [-1, 20, 6, 14])
+  # fc_logits.set_shape([-1, 20, 6, 14])
+  deconv1 = tf.contrib.layers.conv2d_transpose(
+      fc_logits,
+      num_outputs=20,
+      kernel_size=(2, 2),
+      stride=2,
+      padding='VALID',
+      data_format='NCHW',
+      reuse=reuse,
+      scope='deconv1',
+      weights_initializer=tf.truncated_normal_initializer(
+          stddev=0.1, dtype=tf.float32)
+  )
+  deconv1_conv1 = tf.contrib.layers.conv2d(
+      deconv1,
+      20,
+      [3, 3],
+      stride=1,
+      padding='SAME',
+      reuse=reuse,
+      scope='deconv1_conv1',
+      data_format='NCHW',
+      weights_initializer=tf.truncated_normal_initializer(
+          stddev=0.1, dtype=tf.float32)
+  )
+  # deconv2 = tf.contrib.layers.conv2d_transpose(
+  #     deconv1,
+  #     num_outputs=20,
+  #     kernel_size=(1, 1),
+  #     stride=1,
+  #     padding='VALID',
+  #     data_format='NCHW',
+  #     reuse=reuse,
+  #     scope='deconv2',
+  #     weights_initializer=tf.truncated_normal_initializer(
+  #         stddev=0.1, dtype=tf.float32)
+  # )
+  deconv2 = tf.contrib.layers.conv2d_transpose(
+      deconv1_conv1,
+      num_outputs=10,
+      kernel_size=(2, 2),
+      stride=2,
+      padding='VALID',
+      data_format='NCHW',
+      reuse=reuse,
+      scope='deconv2',
+      weights_initializer=tf.truncated_normal_initializer(
+          stddev=0.1, dtype=tf.float32)
+  )
+  deconv2_conv1 = tf.contrib.layers.conv2d(
+      deconv2,
+      10,
+      [3, 3],
+      stride=1,
+      padding='SAME',
+      reuse=reuse,
+      scope='deconv2_conv1',
+      data_format='NCHW',
+      weights_initializer=tf.truncated_normal_initializer(
+          stddev=0.1, dtype=tf.float32)
+  )
+
+  recons_logits = tf.contrib.layers.conv2d(
+      deconv2_conv1,
+      num_outputs=1,
+      kernel_size=(3, 3),
+      stride=1,
+      padding='SAME',
+      data_format='NCHW',
+      activation_fn=None,
+      reuse=reuse,
+      scope='recons',
+      weights_initializer=tf.truncated_normal_initializer(
+          stddev=0.1, dtype=tf.float32)
+  )
+  reconstruction_2d = tf.sigmoid(recons_logits)
 
   if num_targets == 1:
       with tf.name_scope('loss'):
         image_2d = tf.contrib.layers.flatten(recons_image)
-        cross_entropy = tf.nn.sigmoid_cross_entropy_with_logits(labels=image_2d, logits=recons_2d_logits)# tf.pow(reconstruction_2d - image_2d, 2)
+        deconv_2d = tf.contrib.layers.flatten(recons_logits)
+        cross_entropy = tf.nn.sigmoid_cross_entropy_with_logits(labels=image_2d, logits=deconv_2d)# tf.pow(reconstruction_2d - image_2d, 2)
         loss = tf.reduce_sum(cross_entropy, axis=-1)
         batch_loss = tf.reduce_mean(loss)
         balanced_loss = balance_factor * batch_loss

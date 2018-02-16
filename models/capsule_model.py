@@ -76,7 +76,7 @@ class CapsuleModel(model.Model):
         output_dim=num_classes,
         layer_name='capsule2',
         input_atoms=8,
-        output_atoms=32,
+        output_atoms=48,
         num_routing=self._hparams.routing,
         leaky=self._hparams.leaky,)
 
@@ -147,9 +147,9 @@ class CapsuleModel(model.Model):
         remakes.append(
             layers.reconstruction(
                 capsule_mask=tf.one_hot(label, features['num_classes']),
-                num_atoms=32,
+                num_atoms=48,
                 capsule_embedding=capsule_embedding,
-                layer_sizes=[1600, 3200],
+                layer_sizes=[1680],
                 num_pixels=num_pixels,
                 reuse=(i > 0),
                 recons_image=features['recons_image'],
