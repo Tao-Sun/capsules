@@ -260,24 +260,24 @@ def eval_experiment(session, result, writer, last_step, max_steps, **kwargs):
     batch_intersection = 0.0
     batch_union = 0.0
     for i in range(batch_targets.shape[0]):
-        if step != 21:
-            # print("targets[i] shape" + str(targets[i].shape))
-            # print("predictions[i] shape" + str(predictions[i].shape))
-            target = batch_targets[i].flatten()
-            prediction = batch_predictions[i].flatten()
-            intersection = np.sum(np.multiply(target, prediction))
-            batch_intersection += intersection
-            # print("positive_target_indices shape:" + str(positive_target_indices))
-            # print("positive_pred_indices shape:" + str(positive_pred_indices))
-            union = np.sum(target) + np.sum(intersection)
-            batch_union += union
+        # print("targets[i] shape" + str(targets[i].shape))
+        # print("predictions[i] shape" + str(predictions[i].shape))
+        target = batch_targets[i].flatten()
+        prediction = batch_predictions[i].flatten()
+        intersection = np.sum(np.multiply(target, prediction))
+        batch_intersection += intersection
+        # print("positive_target_indices shape:" + str(positive_target_indices))
+        # print("positive_pred_indices shape:" + str(positive_pred_indices))
+        union = np.sum(target) + np.sum(intersection)
+        batch_union += union
 
 
     batch_dice = (2.0 * batch_intersection + smooth) / (batch_union + smooth)
-    total_dices.append(batch_dice)
+    if step != 21:
+        total_dices.append(batch_dice)
     # print("batch_targets shape:" + str(batch_targets.shape))
     # print("batch_predictions shape:" + str(batch_predictions.shape))
-    print("batch_dic:" + str(batch_dice))
+        print("batch_dic:" + str(batch_dice))
 
 
   print('\nmean dices:' + str(np.mean(total_dices)))
@@ -614,6 +614,8 @@ def main(_):
   hparams = default_hparams()
   if FLAGS.hparams_override:
     hparams.parse(FLAGS.hparams_override)
+
+  print(hparams)
 
   if FLAGS.train:
     train(hparams, FLAGS.summary_dir, FLAGS.num_gpus, FLAGS.model,
