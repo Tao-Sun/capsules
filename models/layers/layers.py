@@ -124,15 +124,22 @@ def _update_routing(votes, biases, logit_shape, num_dims, input_dim, output_dim,
 
   activations = tf.TensorArray(
       dtype=tf.float32, size=num_routing, clear_after_read=False)
-  logits = tf.fill(logit_shape, 0.0)
-  i = tf.constant(0, dtype=tf.int32)
-  _, logits, activations = tf.while_loop(
-      lambda i, logits, activations: i < num_routing,
-      _body,
-      loop_vars=[i, logits, activations],
-      swap_memory=True)
+  logits = tf.fill(logit_shape, 1.0)
+  route = tf.nn.softmax(logits, dim=2)
+  preactivate_unrolled = route * votes_trans
+  preact_trans = tf.transpose(preactivate_unrolled, r_t_shape)
+  preactivate = tf.reduce_sum(preact_trans, axis=1) + biases
+  activation = _squash(preactivate)
+  return activation
 
-  return activations.read(num_routing - 1)
+  # i = tf.constant(0, dtype=tf.int32)
+  # _, logits, activations = tf.while_loop(
+  #     lambda i, logits, activations: i < num_routing,
+  #     _body,
+  #     loop_vars=[i, logits, activations],
+  #     swap_memory=True)
+
+  # return activations.read(num_routing - 1)
 
 
 def capsule(input_tensor,
