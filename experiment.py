@@ -267,8 +267,8 @@ def eval_experiment(session, result, writer, last_step, max_steps, **kwargs):
         # print("predictions[i] shape" + str(predictions[i].shape))
         target_0 = batch_targets[i].flatten()
         prediction_0 = batch_predictions[i].flatten()
-        print(target_0[1:100])
-        print(prediction_0[1:100])
+        # print(target_0[1:100])
+        # print(prediction_0[1:100])
         intersection_0 = np.sum(np.multiply(target_0, prediction_0))
         batch_intersection_0 += intersection_0
         union_0 = np.sum(target_0) + np.sum(prediction_0)
@@ -276,9 +276,9 @@ def eval_experiment(session, result, writer, last_step, max_steps, **kwargs):
 
 
         target_1 = 1 - target_0
-        print(target_1[1:100])
+        # print(target_1[1:100])
         prediction_1 = 1 - prediction_0
-        print(prediction_1[1:100])
+        # print(prediction_1[1:100])
         intersection_1 = np.sum(np.multiply(target_1, prediction_1))
         batch_intersection_1 += intersection_1
         # print("positive_target_indices shape:" + str(positive_target_indices))

@@ -133,18 +133,22 @@ class CapsuleModel(model.Model):
     Returns:
       A list of network remakes of the targets.
     """
+
     num_pixels = features['depth'] * features['height'] * features['width']
-    remakes = []
+    fc_remakes = []
     targets = [(features['recons_label'], features['recons_image'])]
     if features['num_targets'] == 2:
       targets.append((features['spare_label'], features['spare_image']))
+    assert(features['recons_label'].get_shape() == features['spare_label'].get_shape())
 
     balance_factor = 1.0
 
     with tf.name_scope('recons'):
       for i in range(features['num_targets']):
         label, image = targets[i]
-        remakes.append(
+        print('label shape:' + str(label.get_shape()))
+        print('capsule_embedding shape:' + str(capsule_embedding.get_shape()))
+        fc_remakes.append(
             layers.fc_recons(
                 number=i,
                 capsule_mask=tf.one_hot(label, features['num_classes']),
@@ -152,22 +156,27 @@ class CapsuleModel(model.Model):
                 capsule_embedding=capsule_embedding,
                 layer_sizes=[1680],
                 num_pixels=num_pixels,
-                reuse=False, #(i > 0),
+                reuse=(i > 0),
                 recons_image=features['recons_image'],
                 num_targets=features['num_targets'],
                 balance_factor=balance_factor))
 
-    fc_2d_stack = tf.stack(remakes, axis=1)
+    fc_2d_stack = tf.stack(fc_remakes, axis=1)
     fc_2d = tf.reshape(fc_2d_stack, [-1, features['num_targets'] * 20, 6, 14])
-    label_logits = layers.deconv(fc_2d, False)
-    label_2d = tf.argmax(tf.nn.softmax(label_logits), 1)
+    print('fc_remakes[0] shape:' + str(fc_remakes[0].get_shape()))
+    label_logits = tf.transpose(layers.deconv(fc_2d, False), perm=[0, 2, 3, 1])
+    label_2d = tf.argmax(label_logits, axis=3)
 
     with tf.name_scope('loss'):
         image_2d = tf.cast(features['recons_image'], tf.int32)
-        logits_2d = tf.transpose(label_logits, perm=[0, 2, 3, 1])
+        #image_2d = tf.contrib.layers.flatten(features['recons_image'])
+        #_, recons_logits = tf.split(label_prob, [1, 1], axis=1)
+        #logits_2d = tf.contrib.layers.flatten(recons_logits)
 
         cross_entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(labels=image_2d,
-                                                                       logits=logits_2d)
+                                                                       logits=label_logits)
+        #cross_entropy = tf.nn.sigmoid_cross_entropy_with_logits(labels=image_2d, logits=logits_2d)
+
         loss = tf.reduce_mean(cross_entropy)
         # batch_loss = tf.reduce_mean(loss)
         balanced_loss = balance_factor * loss
@@ -175,7 +184,7 @@ class CapsuleModel(model.Model):
         tf.summary.scalar('reconstruction_error', balanced_loss)
 
     if self._hparams.verbose:
-      self._summarize_remakes(features, remakes)
+      self._summarize_remakes(features, fc_remakes)
 
     return label_2d
 

@@ -445,17 +445,18 @@ def fc_recons(number, capsule_mask, num_atoms, capsule_embedding, layer_sizes,
     The reconstruction images of shape [batch_size, num_pixels].
   """
   first_layer_size = layer_sizes[0]
+  print('first_layer_size:' + str(first_layer_size))
   capsule_mask_3d = tf.expand_dims(capsule_mask, -1)
   atom_mask = tf.tile(capsule_mask_3d, [1, 1, num_atoms])
   filtered_embedding = capsule_embedding * atom_mask
   filtered_embedding_2d = tf.contrib.layers.flatten(filtered_embedding)
-  print(filtered_embedding_2d.get_shape())
+  print("filtered_embedding_2d shape: " + str(filtered_embedding_2d.get_shape()))
   fc_logits = tf.contrib.layers.stack(
       inputs=filtered_embedding_2d,
       layer=tf.contrib.layers.fully_connected,
       stack_args=[(first_layer_size, tf.nn.relu)],
       reuse=reuse,
-      scope='fc' + str(number),
+      scope='fc',
       weights_initializer=tf.truncated_normal_initializer(
           stddev=0.1, dtype=tf.float32),
       biases_initializer=tf.constant_initializer(0.1))
@@ -526,5 +527,6 @@ def deconv(fc_2d, reuse):
         weights_initializer=tf.truncated_normal_initializer(
             stddev=0.1, dtype=tf.float32)
     )
+    print('label_logits shape:' + str(label_logits.get_shape()))
 
     return label_logits

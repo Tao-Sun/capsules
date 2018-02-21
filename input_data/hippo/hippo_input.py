@@ -80,8 +80,8 @@ def read_and_decode(filename_queue, image_height, image_width):
     # Convert from [0, 255] -> [-0.5, 0.5] floats.
     image = tf.cast(image, tf.float32) * (1. / 255)
     label = tf.cast(label, tf.float32) * (1. / 255)
-    recons_label = features['label']
-    spare_label = tf.constant(1, tf.int64)
+    recons_label = tf.constant(1, tf.int64)
+    spare_label = tf.constant(0, tf.int64)
 
     return image, label, recons_label, spare_label
 
