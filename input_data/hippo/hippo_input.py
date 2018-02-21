@@ -81,8 +81,9 @@ def read_and_decode(filename_queue, image_height, image_width):
     image = tf.cast(image, tf.float32) * (1. / 255)
     label = tf.cast(label, tf.float32) * (1. / 255)
     recons_label = features['label']
+    spare_label = tf.constant(1, tf.int64)
 
-    return image, label, recons_label
+    return image, label, recons_label, spare_label
 
 
 def inputs(split, data_dir, batch_size, image_height, image_width, num_targets, file_start, file_end):
@@ -119,13 +120,15 @@ def inputs(split, data_dir, batch_size, image_height, image_width, num_targets, 
 
         # Even when reading in multiple threads, share the filename
         # queue.
-        image, label, recons_label = read_and_decode(filename_queue, image_height, image_width)
+        image, label, recons_label, spare_label = read_and_decode(filename_queue, image_height, image_width)
 
         features = {
             'images': image,
             'labels': label,
             'recons_label': recons_label,
-            'recons_image': label
+            'recons_image': label,
+            'spare_label': spare_label,
+            'spare_image': label
         }
 
         if split == 'train':
@@ -149,7 +152,7 @@ def inputs(split, data_dir, batch_size, image_height, image_width, num_targets, 
         batched_features['width'] = image_width
         batched_features['depth'] = 1
         batched_features['num_targets'] = num_targets
-        batched_features['num_classes'] = 1
+        batched_features['num_classes'] = 2
 
         return batched_features
 

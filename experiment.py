@@ -58,7 +58,7 @@ tf.flags.DEFINE_string('dataset', 'mnist',
                        'The dataset to use for the experiment.'
                        'mnist, norb, cifar10.')
 tf.flags.DEFINE_integer('num_gpus', 1, 'Number of gpus to use.')
-tf.flags.DEFINE_integer('num_targets', 1,
+tf.flags.DEFINE_integer('num_targets', 2,
                         'Number of targets to detect (1 or 2).')
 tf.flags.DEFINE_integer('num_trials', 1,
                         'Number of trials for ensemble evaluation.')
@@ -240,7 +240,8 @@ def eval_experiment(session, result, writer, last_step, max_steps, **kwargs):
   del kwargs
 
   smooth = 1.0
-  total_dices = []
+  total_dices_0 = []
+  total_dices_1 = []
   for step in range(max_steps):
     # summary_i, correct, almost = session.run(
     #     [result.summary, result.correct, result.almost])
@@ -257,31 +258,48 @@ def eval_experiment(session, result, writer, last_step, max_steps, **kwargs):
     nib.save(target_nii, os.path.join(FLAGS.data_dir, 't_' + str(step) + '.nii.gz'))
     nib.save(prediction_nii, os.path.join(FLAGS.data_dir, 'p_' + str(step) + '.nii.gz'))
 
-    batch_intersection = 0.0
-    batch_union = 0.0
+    batch_intersection_0 = 0.0
+    batch_union_0 = 0.0
+    batch_intersection_1 = 0.0
+    batch_union_1 = 0.0
     for i in range(batch_targets.shape[0]):
         # print("targets[i] shape" + str(targets[i].shape))
         # print("predictions[i] shape" + str(predictions[i].shape))
-        target = batch_targets[i].flatten()
-        prediction = batch_predictions[i].flatten()
-        intersection = np.sum(np.multiply(target, prediction))
-        batch_intersection += intersection
+        target_0 = batch_targets[i].flatten()
+        prediction_0 = batch_predictions[i].flatten()
+        print(target_0[1:100])
+        print(prediction_0[1:100])
+        intersection_0 = np.sum(np.multiply(target_0, prediction_0))
+        batch_intersection_0 += intersection_0
+        union_0 = np.sum(target_0) + np.sum(prediction_0)
+        batch_union_0 += union_0
+
+
+        target_1 = 1 - target_0
+        print(target_1[1:100])
+        prediction_1 = 1 - prediction_0
+        print(prediction_1[1:100])
+        intersection_1 = np.sum(np.multiply(target_1, prediction_1))
+        batch_intersection_1 += intersection_1
         # print("positive_target_indices shape:" + str(positive_target_indices))
         # print("positive_pred_indices shape:" + str(positive_pred_indices))
-        union = np.sum(target) + np.sum(intersection)
-        batch_union += union
+
+        union_1 = np.sum(target_1) + np.sum(prediction_1)
+        batch_union_1 += union_1
 
 
-    batch_dice = (2.0 * batch_intersection + smooth) / (batch_union + smooth)
-    if step != 21:
-        total_dices.append(batch_dice)
+    batch_dice_0 = (2.0 * batch_intersection_0 + smooth) / (batch_union_0 + smooth)
+    batch_dice_1 = (2.0 * batch_intersection_1 + smooth) / (batch_union_1 + smooth)
+    # if step != 21:
+    total_dices_0.append(batch_dice_0)
+    total_dices_1.append(batch_dice_1)
     # print("batch_targets shape:" + str(batch_targets.shape))
     # print("batch_predictions shape:" + str(batch_predictions.shape))
-        print("batch_dic:" + str(batch_dice))
+    print("batch_dices: %f, %f" % (batch_dice_0, batch_dice_1))
 
 
-  print('\nmean dices:' + str(np.mean(total_dices)))
-  print('dices std:' + str(np.std(total_dices)))
+  print('\nmean dices:  %f, %f' % (np.mean(total_dices_0), np.mean(total_dices_1)))
+  print('dices std: %f, %f' % (np.std(total_dices_0), np.std(total_dices_0)))
   # for i in range(10):
   #   scipy.misc.imsave(FLAGS.data_dir + '/t_' + str(i) + '.jpg', targets[i])
   #   scipy.misc.imsave(FLAGS.data_dir + '/p_' + str(i) + '.jpg', predictions[i])
