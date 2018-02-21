@@ -145,39 +145,37 @@ class CapsuleModel(model.Model):
       for i in range(features['num_targets']):
         label, image = targets[i]
         remakes.append(
-            layers.fc_recons(
-                number=i,
+            layers.reconstruction(
                 capsule_mask=tf.one_hot(label, features['num_classes']),
                 num_atoms=64,
                 capsule_embedding=capsule_embedding,
                 layer_sizes=[1680],
                 num_pixels=num_pixels,
-                reuse=False, #(i > 0),
+                reuse=(i > 0),
                 recons_image=features['recons_image'],
                 num_targets=features['num_targets'],
                 balance_factor=balance_factor))
 
-    fc_2d_stack = tf.stack(remakes, axis=1)
-    fc_2d = tf.reshape(fc_2d_stack, [-1, features['num_targets'] * 20, 6, 14])
-    label_logits = layers.deconv(fc_2d, False)
-    label_2d = tf.argmax(tf.nn.softmax(label_logits), 1)
+      if features['num_targets'] == 2:
+          base_recons = remakes[0]
+          top_recons = remakes[1]
+          merged = np.add(base_recons, top_recons, dtype=np.int32)
+          reconstruction_2d = np.minimum(merged, 255).astype(np.uint8)
+          merged_target = features['merged_raw']
+          with tf.name_scope('loss'):
+            target_2d = tf.contrib.layers.flatten(merged_target)
+            distance = tf.pow(reconstruction_2d - target_2d, 2)
+            loss = tf.reduce_sum(distance, axis=-1)
+            batch_loss = tf.reduce_mean(loss)
+            balanced_loss = balance_factor * batch_loss
+            tf.add_to_collection('losses', balanced_loss)
+            tf.summary.scalar('reconstruction_error', balanced_loss)
 
-    with tf.name_scope('loss'):
-        image_2d = tf.cast(features['recons_image'], tf.int32)
-        logits_2d = tf.transpose(label_logits, perm=[0, 2, 3, 1])
-
-        cross_entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(labels=image_2d,
-                                                                       logits=logits_2d)
-        loss = tf.reduce_mean(cross_entropy)
-        # batch_loss = tf.reduce_mean(loss)
-        balanced_loss = balance_factor * loss
-        tf.add_to_collection('losses', balanced_loss)
-        tf.summary.scalar('reconstruction_error', balanced_loss)
 
     if self._hparams.verbose:
       self._summarize_remakes(features, remakes)
 
-    return label_2d
+    return remakes
 
   def inference(self, features):
     """Adds the inference graph ops.

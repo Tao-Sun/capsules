@@ -406,9 +406,9 @@ def evaluate(logits, remakes, labels, recons_image, num_targets, scope, loss_typ
     with tf.name_scope('correct_prediction'):
       # target = tf.contrib.layers.flatten(recons_image)
       target = recons_image
-      prediction = tf.reshape(remakes, recons_image.get_shape())
-      prediction.set_shape(recons_image.get_shape())
-      # prediction = tf.to_float(tf.greater(prediction_prob, 0.5))
+      prediction_prob = tf.reshape(remakes[0], recons_image.get_shape())
+      prediction_prob.set_shape(recons_image.get_shape())
+      prediction = tf.to_float(tf.greater(prediction_prob, 0.5))
       # target_flatten = tf.contrib.layers.flatten(target)
       # pred_flatten = tf.contrib.layers.flatten(prediction)
 
@@ -420,7 +420,7 @@ def evaluate(logits, remakes, labels, recons_image, num_targets, scope, loss_typ
   return total_loss, target, prediction
 
 
-def fc_recons(number, capsule_mask, num_atoms, capsule_embedding, layer_sizes,
+def reconstruction(capsule_mask, num_atoms, capsule_embedding, layer_sizes,
                    num_pixels, reuse, recons_image, balance_factor, num_targets):
   """Adds the reconstruction loss and calculates the reconstructed image.
 
@@ -455,76 +455,97 @@ def fc_recons(number, capsule_mask, num_atoms, capsule_embedding, layer_sizes,
       layer=tf.contrib.layers.fully_connected,
       stack_args=[(first_layer_size, tf.nn.relu)],
       reuse=reuse,
-      scope='fc' + str(number),
+      scope='fc',
       weights_initializer=tf.truncated_normal_initializer(
           stddev=0.1, dtype=tf.float32),
       biases_initializer=tf.constant_initializer(0.1))
-  fc_2d = tf.reshape(fc_logits, [-1, 20, 6, 14])
+  fc_logits = tf.reshape(fc_logits, [-1, 20, 6, 14])
+  # fc_logits.set_shape([-1, 20, 6, 14])
+  deconv1 = tf.contrib.layers.conv2d_transpose(
+      fc_logits,
+      num_outputs=20,
+      kernel_size=(2, 2),
+      stride=2,
+      padding='VALID',
+      data_format='NCHW',
+      reuse=reuse,
+      scope='deconv1',
+      weights_initializer=tf.truncated_normal_initializer(
+          stddev=0.1, dtype=tf.float32)
+  )
+  deconv1_conv1 = tf.contrib.layers.conv2d(
+      deconv1,
+      20,
+      [3, 3],
+      stride=1,
+      padding='SAME',
+      reuse=reuse,
+      scope='deconv1_conv1',
+      data_format='NCHW',
+      weights_initializer=tf.truncated_normal_initializer(
+          stddev=0.1, dtype=tf.float32)
+  )
+  # deconv2 = tf.contrib.layers.conv2d_transpose(
+  #     deconv1,
+  #     num_outputs=20,
+  #     kernel_size=(1, 1),
+  #     stride=1,
+  #     padding='VALID',
+  #     data_format='NCHW',
+  #     reuse=reuse,
+  #     scope='deconv2',
+  #     weights_initializer=tf.truncated_normal_initializer(
+  #         stddev=0.1, dtype=tf.float32)
+  # )
+  deconv2 = tf.contrib.layers.conv2d_transpose(
+      deconv1_conv1,
+      num_outputs=10,
+      kernel_size=(2, 2),
+      stride=2,
+      padding='VALID',
+      data_format='NCHW',
+      reuse=reuse,
+      scope='deconv2',
+      weights_initializer=tf.truncated_normal_initializer(
+          stddev=0.1, dtype=tf.float32)
+  )
+  deconv2_conv1 = tf.contrib.layers.conv2d(
+      deconv2,
+      10,
+      [3, 3],
+      stride=1,
+      padding='SAME',
+      reuse=reuse,
+      scope='deconv2_conv1',
+      data_format='NCHW',
+      weights_initializer=tf.truncated_normal_initializer(
+          stddev=0.1, dtype=tf.float32)
+  )
 
-  return fc_2d
+  recons_logits = tf.contrib.layers.conv2d(
+      deconv2_conv1,
+      num_outputs=1,
+      kernel_size=(3, 3),
+      stride=1,
+      padding='SAME',
+      data_format='NCHW',
+      activation_fn=None,
+      reuse=reuse,
+      scope='recons',
+      weights_initializer=tf.truncated_normal_initializer(
+          stddev=0.1, dtype=tf.float32)
+  )
+  reconstruction_2d = tf.sigmoid(recons_logits)
 
-def deconv(fc_2d, reuse):
-    deconv1 = tf.contrib.layers.conv2d_transpose(
-        fc_2d,
-        num_outputs=20,
-        kernel_size=(2, 2),
-        stride=2,
-        padding='VALID',
-        data_format='NCHW',
-        reuse=reuse,
-        scope='deconv1',
-        weights_initializer=tf.truncated_normal_initializer(
-            stddev=0.1, dtype=tf.float32)
-    )
-    deconv1_conv1 = tf.contrib.layers.conv2d(
-        deconv1,
-        20,
-        [3, 3],
-        stride=1,
-        padding='SAME',
-        reuse=reuse,
-        scope='deconv1_conv1',
-        data_format='NCHW',
-        weights_initializer=tf.truncated_normal_initializer(
-            stddev=0.1, dtype=tf.float32)
-    )
-    deconv2 = tf.contrib.layers.conv2d_transpose(
-        deconv1_conv1,
-        num_outputs=10,
-        kernel_size=(2, 2),
-        stride=2,
-        padding='VALID',
-        data_format='NCHW',
-        reuse=reuse,
-        scope='deconv2',
-        weights_initializer=tf.truncated_normal_initializer(
-            stddev=0.1, dtype=tf.float32)
-    )
-    deconv2_conv1 = tf.contrib.layers.conv2d(
-        deconv2,
-        10,
-        [3, 3],
-        stride=1,
-        padding='SAME',
-        reuse=reuse,
-        scope='deconv2_conv1',
-        data_format='NCHW',
-        weights_initializer=tf.truncated_normal_initializer(
-            stddev=0.1, dtype=tf.float32)
-    )
+  if num_targets == 1:
+      with tf.name_scope('loss'):
+        image_2d = tf.contrib.layers.flatten(recons_image)
+        deconv_2d = tf.contrib.layers.flatten(recons_logits)
+        cross_entropy = tf.nn.sigmoid_cross_entropy_with_logits(labels=image_2d, logits=deconv_2d)# tf.pow(reconstruction_2d - image_2d, 2)
+        loss = tf.reduce_sum(cross_entropy, axis=-1)
+        batch_loss = tf.reduce_mean(loss)
+        balanced_loss = balance_factor * batch_loss
+        tf.add_to_collection('losses', balanced_loss)
+        tf.summary.scalar('reconstruction_error', balanced_loss)
 
-    label_logits = tf.contrib.layers.conv2d(
-        deconv2_conv1,
-        num_outputs=2,
-        kernel_size=(3, 3),
-        stride=1,
-        padding='SAME',
-        data_format='NCHW',
-        activation_fn=None,
-        reuse=reuse,
-        scope='recons',
-        weights_initializer=tf.truncated_normal_initializer(
-            stddev=0.1, dtype=tf.float32)
-    )
-
-    return label_logits
+  return reconstruction_2d
