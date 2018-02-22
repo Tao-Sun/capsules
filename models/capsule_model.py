@@ -141,7 +141,6 @@ class CapsuleModel(model.Model):
       targets.append((features['spare_label'], features['spare_image']))
     assert(features['recons_label'].get_shape() == features['spare_label'].get_shape())
 
-    balance_factor = 1.0
 
     with tf.name_scope('recons'):
       for i in range(features['num_targets']):
@@ -158,11 +157,10 @@ class CapsuleModel(model.Model):
                 num_pixels=num_pixels,
                 reuse=(i > 0),
                 recons_image=features['recons_image'],
-                num_targets=features['num_targets'],
-                balance_factor=balance_factor))
+                num_targets=features['num_targets']))
 
     fc_2d_stack = tf.stack(fc_remakes, axis=1)
-    fc_2d = tf.reshape(fc_2d_stack, [-1, features['num_targets'] * 20, 6, 14])
+    fc_2d = tf.reshape(fc_2d_stack, [-1, features['num_targets'] * 80, 3, 7])
     print('fc_remakes[0] shape:' + str(fc_remakes[0].get_shape()))
     label_logits = tf.transpose(layers.deconv(fc_2d, False), perm=[0, 2, 3, 1])
     label_2d = tf.argmax(label_logits, axis=3)
@@ -172,16 +170,27 @@ class CapsuleModel(model.Model):
         #image_2d = tf.contrib.layers.flatten(features['recons_image'])
         #_, recons_logits = tf.split(label_prob, [1, 1], axis=1)
         #logits_2d = tf.contrib.layers.flatten(recons_logits)
-
         cross_entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(labels=image_2d,
                                                                        logits=label_logits)
         #cross_entropy = tf.nn.sigmoid_cross_entropy_with_logits(labels=image_2d, logits=logits_2d)
 
-        loss = tf.reduce_mean(cross_entropy)
+        cross_entropy_loss = tf.reduce_mean(cross_entropy)
         # batch_loss = tf.reduce_mean(loss)
-        balanced_loss = balance_factor * loss
-        tf.add_to_collection('losses', balanced_loss)
-        tf.summary.scalar('reconstruction_error', balanced_loss)
+        balanced_loss1 = cross_entropy_loss
+
+        balance_factor = 0.8
+        capsule_logits = tf.norm(capsule_embedding, axis=-1)
+        flatten_labels = tf.contrib.layers.flatten(tf.cast(label_2d, tf.float32))
+        positive_percent = tf.divide(tf.reduce_sum(flatten_labels, axis=1),
+                                     tf.cast(tf.shape(flatten_labels)[1], tf.float32))
+        negative_percent = 1 - positive_percent
+        label_percent = tf.stack([positive_percent, negative_percent], axis=1)
+        balanced_loss2 = balance_factor * tf.reduce_mean(tf.pow(capsule_logits - label_percent, 2))
+
+        tf.add_to_collection('losses', balanced_loss1)
+        # tf.add_to_collection('losses', balanced_loss2)
+        tf.summary.scalar('reconstruction_error', balanced_loss1)
+        tf.summary.scalar('reconstruction_error', balanced_loss2)
 
     if self._hparams.verbose:
       self._summarize_remakes(features, fc_remakes)
