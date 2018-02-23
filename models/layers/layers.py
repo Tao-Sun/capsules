@@ -132,7 +132,7 @@ def _update_routing(votes, biases, logit_shape, num_dims, input_dim, output_dim,
       loop_vars=[i, logits, activations],
       swap_memory=True)
 
-  return activations.read(num_routing - 1)
+  return activations.read(num_routing - 1), logits
 
 
 def capsule(input_tensor,
@@ -188,7 +188,7 @@ def capsule(input_tensor,
     with tf.name_scope('routing'):
       input_shape = tf.shape(input_tensor)
       logit_shape = tf.stack([input_shape[0], input_dim, output_dim])
-      activations = _update_routing(
+      activations, coupling_coeff = _update_routing(
           votes=votes_reshaped,
           biases=biases,
           logit_shape=logit_shape,
@@ -196,7 +196,7 @@ def capsule(input_tensor,
           input_dim=input_dim,
           output_dim=output_dim,
           **routing_args)
-    return activations
+    return activations, coupling_coeff
 
 
 def _depthwise_conv3d(input_tensor,
@@ -327,7 +327,7 @@ def conv_slim_capsule(input_tensor,
       ])
       biases_replicated = tf.tile(biases,
                                   [1, 1, votes_shape[2], votes_shape[3]])
-      activations = _update_routing(
+      activations, _ = _update_routing(
           votes=votes,
           biases=biases_replicated,
           logit_shape=logit_shape,
@@ -372,7 +372,7 @@ def _margin_loss2(recons_image, raw_logits):
     return loss
 
 
-def evaluate(logits, remakes, labels, recons_image, num_targets, scope, loss_type):
+def evaluate(logits, remakes, labels, recons_image, num_targets, scope, loss_type, balance_factor=0.05):
   """Calculates total loss and performance metrics like accuracy.
 
   Args:
@@ -405,7 +405,7 @@ def evaluate(logits, remakes, labels, recons_image, num_targets, scope, loss_typ
       raise NotImplementedError('Not implemented')
 
     with tf.name_scope('total'):
-      batch_classification_loss = 0.5 * tf.reduce_mean(classification_loss)
+      batch_classification_loss = balance_factor * tf.reduce_mean(classification_loss)
       tf.add_to_collection('losses', batch_classification_loss)
   tf.summary.scalar('batch_classification_cost', batch_classification_loss)
 
@@ -431,143 +431,169 @@ def evaluate(logits, remakes, labels, recons_image, num_targets, scope, loss_typ
   return total_loss, target, prediction
 
 
-def fc_recons(number, capsule_mask, num_atoms, capsule_embedding, layer_sizes,
-                   num_pixels, reuse, recons_image, num_targets):
-  """Adds the reconstruction loss and calculates the reconstructed image.
+def reconstruction(capsule_mask, num_atoms, capsule_embedding, layer_sizes,
+                   num_pixels, reuse, image, balance_factor):
+    """Adds the reconstruction loss and calculates the reconstructed image.
 
-  Given the last capsule output layer as input of shape [batch, 10, num_atoms]
-  add 3 fully connected layers on top of it.
-  Feeds the masked output of the model to the reconstruction sub-network.
-  Adds the difference with reconstruction image as reconstruction loss to the
-  loss collection.
+    Given the last capsule output layer as input of shape [batch, 10, num_atoms]
+    add 3 fully connected layers on top of it.
+    Feeds the masked output of the model to the reconstruction sub-network.
+    Adds the difference with reconstruction image as reconstruction loss to the
+    loss collection.
 
-  Args:
-    capsule_mask: tensor, for each data in the batch it has the one hot
-      encoding of the target id.
-    num_atoms: scalar, number of atoms in the given capsule_embedding.
-    capsule_embedding: tensor, output of the last capsule layer.
-    layer_sizes: (scalar, scalar), size of the first and second layer.
-    num_pixels: scalar, number of pixels in the target image.
-    reuse: if set reuse variables.
-    image: The reconstruction target image.
-    balance_factor: scalar, downweight the loss to be in valid range.
+    Args:
+      capsule_mask: tensor, for each data in the batch it has the one hot
+        encoding of the target id.
+      num_atoms: scalar, number of atoms in the given capsule_embedding.
+      capsule_embedding: tensor, output of the last capsule layer.
+      layer_sizes: (scalar, scalar), size of the first and second layer.
+      num_pixels: scalar, number of pixels in the target image.
+      reuse: if set reuse variables.
+      image: The reconstruction target image.
+      balance_factor: scalar, downweight the loss to be in valid range.
 
-  Returns:
-    The reconstruction images of shape [batch_size, num_pixels].
-  """
-  first_layer_size = layer_sizes[0]
-  print('first_layer_size:' + str(first_layer_size))
-  capsule_mask_3d = tf.expand_dims(capsule_mask, -1)
-  atom_mask = tf.tile(capsule_mask_3d, [1, 1, num_atoms])
-  filtered_embedding = capsule_embedding * atom_mask
-  filtered_embedding_2d = tf.contrib.layers.flatten(filtered_embedding)
-  print("filtered_embedding_2d shape: " + str(filtered_embedding_2d.get_shape()))
-  fc_logits = tf.contrib.layers.stack(
-      inputs=filtered_embedding_2d,
-      layer=tf.contrib.layers.fully_connected,
-      stack_args=[(first_layer_size, tf.nn.relu)],
-      reuse=reuse,
-      scope='fc',
-      weights_initializer=tf.truncated_normal_initializer(
-          stddev=5e-2, dtype=tf.float32),
-      biases_initializer=tf.constant_initializer(0.1))
-  fc_2d = tf.reshape(fc_logits, [-1, 80, 3, 7])
+    Returns:
+      The reconstruction images of shape [batch_size, num_pixels].
+    """
+    first_layer_size, second_layer_size = layer_sizes
+    capsule_2d = tf.contrib.layers.flatten(capsule_embedding)
+    # capsule_mask_3d = tf.expand_dims(capsule_mask, -1)
+    # atom_mask = tf.tile(capsule_mask_3d, [1, 1, num_atoms])
+    # filtered_embedding = capsule_embedding * atom_mask
+    # filtered_embedding_2d = tf.contrib.layers.flatten(filtered_embedding)
+    reconstruction_2d = tf.contrib.layers.stack(
+        inputs=capsule_2d,
+        layer=tf.contrib.layers.fully_connected,
+        stack_args=[(first_layer_size, tf.nn.relu),
+                    (second_layer_size, tf.nn.relu),
+                    (num_pixels, tf.sigmoid)],
+        reuse=reuse,
+        scope='recons',
+        weights_initializer=tf.truncated_normal_initializer(
+            stddev=0.1, dtype=tf.float32),
+        biases_initializer=tf.constant_initializer(0.1))
 
-  return fc_2d
+    with tf.name_scope('loss'):
+        image_2d = tf.contrib.layers.flatten(image)
+        distance = tf.pow(reconstruction_2d - image_2d, 2)
+        loss = tf.reduce_sum(distance, axis=-1)
+        batch_loss = tf.reduce_mean(loss)
+        balanced_loss = balance_factor * batch_loss
+        tf.add_to_collection('losses', balanced_loss)
+        tf.summary.scalar('reconstruction_error', balanced_loss)
 
-def deconv(fc_2d, reuse):
+    return reconstruction_2d
+
+def deconv(features, fc_2d, reuse, balance_factor=0.8):
     deconv1 = tf.contrib.layers.conv2d_transpose(
         fc_2d,
-        num_outputs=80,
-        kernel_size=(2, 2),
+        num_outputs=2,
+        kernel_size=(10, 10),
         stride=2,
         padding='VALID',
-        data_format='NCHW',
+        data_format='NHWC',
         reuse=reuse,
         scope='deconv1',
         weights_initializer=tf.truncated_normal_initializer(
             stddev=5e-2, dtype=tf.float32),
         activation_fn=tf.nn.relu
     )
-    deconv1_conv1 = tf.contrib.layers.conv2d(
+    # deconv1_conv1 = tf.contrib.layers.conv2d(
+    #     deconv1,
+    #     80,
+    #     [3, 3],
+    #     stride=1,
+    #     padding='SAME',
+    #     reuse=reuse,
+    #     scope='deconv1_conv1',
+    #     data_format='NCHW',
+    #     weights_initializer=tf.truncated_normal_initializer(
+    #         stddev=5e-2, dtype=tf.float32),
+    #     activation_fn = tf.nn.relu
+    # )
+    label_logits = tf.contrib.layers.conv2d_transpose(
         deconv1,
-        80,
-        [3, 3],
+        num_outputs=2,
+        kernel_size=(9, 9),
         stride=1,
-        padding='SAME',
-        reuse=reuse,
-        scope='deconv1_conv1',
-        data_format='NCHW',
-        weights_initializer=tf.truncated_normal_initializer(
-            stddev=5e-2, dtype=tf.float32),
-        activation_fn = tf.nn.relu
-    )
-    deconv2 = tf.contrib.layers.conv2d_transpose(
-        deconv1_conv1,
-        num_outputs=40,
-        kernel_size=(2, 2),
-        stride=2,
         padding='VALID',
-        data_format='NCHW',
+        data_format='NHWC',
         reuse=reuse,
         scope='deconv2',
         activation_fn=tf.nn.relu,
         weights_initializer=tf.truncated_normal_initializer(
             stddev=5e-2, dtype=tf.float32)
     )
-    deconv2_conv1 = tf.contrib.layers.conv2d(
-        deconv2,
-        40,
-        [3, 3],
-        stride=1,
-        padding='SAME',
-        reuse=reuse,
-        scope='deconv2_conv1',
-        data_format='NCHW',
-        activation_fn=tf.nn.relu,
-        weights_initializer=tf.truncated_normal_initializer(
-            stddev=5e-2, dtype=tf.float32)
-    )
-    deconv3 = tf.contrib.layers.conv2d_transpose(
-        deconv2_conv1,
-        num_outputs=20,
-        kernel_size=(2, 2),
-        stride=2,
-        padding='VALID',
-        data_format='NCHW',
-        reuse=reuse,
-        scope='deconv3',
-        activation_fn=tf.nn.relu,
-        weights_initializer=tf.truncated_normal_initializer(
-            stddev=5e-2, dtype=tf.float32)
-    )
-    deconv3_conv1 = tf.contrib.layers.conv2d(
-        deconv3,
-        20,
-        [3, 3],
-        stride=1,
-        padding='SAME',
-        reuse=reuse,
-        scope='decon3_conv1',
-        data_format='NCHW',
-        activation_fn=tf.nn.relu,
-        weights_initializer=tf.truncated_normal_initializer(
-            stddev=5e-2, dtype=tf.float32)
-    )
+    # deconv2_conv1 = tf.contrib.layers.conv2d(
+    #     deconv2,
+    #     40,
+    #     [3, 3],
+    #     stride=1,
+    #     padding='SAME',
+    #     reuse=reuse,
+    #     scope='deconv2_conv1',
+    #     data_format='NCHW',
+    #     activation_fn=tf.nn.relu,
+    #     weights_initializer=tf.truncated_normal_initializer(
+    #         stddev=5e-2, dtype=tf.float32)
+    # )
+    # deconv3 = tf.contrib.layers.conv2d_transpose(
+    #     deconv2_conv1,
+    #     num_outputs=20,
+    #     kernel_size=(2, 2),
+    #     stride=2,
+    #     padding='VALID',
+    #     data_format='NCHW',
+    #     reuse=reuse,
+    #     scope='deconv3',
+    #     activation_fn=tf.nn.relu,
+    #     weights_initializer=tf.truncated_normal_initializer(
+    #         stddev=5e-2, dtype=tf.float32)
+    # )
+    # deconv3_conv1 = tf.contrib.layers.conv2d(
+    #     deconv3,
+    #     20,
+    #     [3, 3],
+    #     stride=1,
+    #     padding='SAME',
+    #     reuse=reuse,
+    #     scope='decon3_conv1',
+    #     data_format='NCHW',
+    #     activation_fn=tf.nn.relu,
+    #     weights_initializer=tf.truncated_normal_initializer(
+    #         stddev=5e-2, dtype=tf.float32)
+    # )
 
-    label_logits = tf.contrib.layers.conv2d(
-        deconv3_conv1,
-        num_outputs=2,
-        kernel_size=(3, 3),
-        stride=1,
-        padding='SAME',
-        data_format='NCHW',
-        activation_fn=tf.nn.relu,
-        reuse=reuse,
-        scope='classifier',
-        weights_initializer=tf.truncated_normal_initializer(
-            stddev=5e-2, dtype=tf.float32)
-    )
-    print('label_logits shape:' + str(label_logits.get_shape()))
+    # label_logits = tf.contrib.layers.conv2d(
+    #     deconv3_conv1,
+    #     num_outputs=2,
+    #     kernel_size=(3, 3),
+    #     stride=1,
+    #     padding='SAME',
+    #     data_format='NCHW',
+    #     activation_fn=tf.nn.relu,
+    #     reuse=reuse,
+    #     scope='classifier',
+    #     weights_initializer=tf.truncated_normal_initializer(
+    #         stddev=5e-2, dtype=tf.float32)
+    # )
+    # print('label_logits shape:' + str(label_logits.get_shape()))
+
+    with tf.name_scope('decode'):
+        image_2d = tf.cast(features['recons_image'], tf.int32)
+        #image_2d = tf.contrib.layers.flatten(features['recons_image'])
+        #_, recons_logits = tf.split(label_prob, [1, 1], axis=1)
+        #logits_2d = tf.contrib.layers.flatten(recons_logits)
+        cross_entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(labels=image_2d,
+                                                                       logits=label_logits)
+        #cross_entropy = tf.nn.sigmoid_cross_entropy_with_logits(labels=image_2d, logits=logits_2d)
+
+        cross_entropy_loss = tf.reduce_mean(cross_entropy)
+        # batch_loss = tf.reduce_mean(loss)
+        balanced_loss = balance_factor * cross_entropy_loss
+
+        tf.add_to_collection('losses', balanced_loss)
+        # tf.add_to_collection('losses', balanced_loss2)
+        tf.summary.scalar('decode_error', balanced_loss)
 
     return label_logits

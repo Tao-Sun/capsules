@@ -107,9 +107,9 @@ def inputs(split, data_dir, batch_size, image_height, image_width, num_targets, 
 
     file_num = file_end - file_start + 1
     if split == 'train':
-        file_names = [os.path.join(data_dir, str(i) + '.tfrecords') for i in range(1, int(0.8 * file_num))]
+        file_names = [os.path.join(data_dir, str(i) + '.tfrecords') for i in range(int(0.2 * file_num), file_end + 1)]
     elif split == 'test':
-        file_names = [os.path.join(data_dir, str(i) + '.tfrecords') for i in range(int(0.8 * file_num), file_end + 1)]
+        file_names = [os.path.join(data_dir, str(i) + '.tfrecords') for i in range(1, int(0.2 * file_num))]
 
     with tf.name_scope('input'):
         if split == 'train':

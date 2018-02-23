@@ -70,7 +70,7 @@ class CapsuleModel(model.Model):
                              [tf.shape(input_tensor)[0], -1, 8])
     _, _, _, height, width = capsule1.get_shape()
     input_dim = self._hparams.num_prime_capsules * height.value * width.value
-    return layers.capsule(
+    capsule2_3d, coupling_coeff = layers.capsule(
         input_tensor=capsule1_3d,
         input_dim=input_dim,
         output_dim=num_classes,
@@ -79,6 +79,8 @@ class CapsuleModel(model.Model):
         output_atoms=64,
         num_routing=self._hparams.routing,
         leaky=self._hparams.leaky,)
+
+    return capsule1_3d, capsule2_3d, coupling_coeff
 
   def _summarize_remakes(self, features, remakes):
     """Adds an image summary consisting original, target and remake images.
@@ -135,65 +137,46 @@ class CapsuleModel(model.Model):
     """
 
     num_pixels = features['depth'] * features['height'] * features['width']
-    fc_remakes = []
-    targets = [(features['recons_label'], features['recons_image'])]
+    remakes = []
+    targets = [(features['recons_label'], features['images'])]
     if features['num_targets'] == 2:
       targets.append((features['spare_label'], features['spare_image']))
     assert(features['recons_label'].get_shape() == features['spare_label'].get_shape())
 
 
     with tf.name_scope('recons'):
-      for i in range(features['num_targets']):
-        label, image = targets[i]
-        print('label shape:' + str(label.get_shape()))
-        print('capsule_embedding shape:' + str(capsule_embedding.get_shape()))
-        fc_remakes.append(
-            layers.fc_recons(
-                number=i,
+        label, image = targets[0]
+        remakes.append(
+            layers.reconstruction(
                 capsule_mask=tf.one_hot(label, features['num_classes']),
-                num_atoms=64,
+                num_atoms=16,
                 capsule_embedding=capsule_embedding,
-                layer_sizes=[1680],
+                layer_sizes=[672, 1344],
                 num_pixels=num_pixels,
-                reuse=(i > 0),
-                recons_image=features['recons_image'],
-                num_targets=features['num_targets']))
-
-    fc_2d_stack = tf.stack(fc_remakes, axis=1)
-    fc_2d = tf.reshape(fc_2d_stack, [-1, features['num_targets'] * 80, 3, 7])
-    print('fc_remakes[0] shape:' + str(fc_remakes[0].get_shape()))
-    label_logits = tf.transpose(layers.deconv(fc_2d, False), perm=[0, 2, 3, 1])
-    label_2d = tf.argmax(label_logits, axis=3)
-
-    with tf.name_scope('loss'):
-        image_2d = tf.cast(features['recons_image'], tf.int32)
-        #image_2d = tf.contrib.layers.flatten(features['recons_image'])
-        #_, recons_logits = tf.split(label_prob, [1, 1], axis=1)
-        #logits_2d = tf.contrib.layers.flatten(recons_logits)
-        cross_entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(labels=image_2d,
-                                                                       logits=label_logits)
-        #cross_entropy = tf.nn.sigmoid_cross_entropy_with_logits(labels=image_2d, logits=logits_2d)
-
-        cross_entropy_loss = tf.reduce_mean(cross_entropy)
-        # batch_loss = tf.reduce_mean(loss)
-        balanced_loss1 = cross_entropy_loss
-
-        balance_factor = 0.8
-        capsule_logits = tf.norm(capsule_embedding, axis=-1)
-        flatten_labels = tf.contrib.layers.flatten(tf.cast(label_2d, tf.float32))
-        positive_percent = tf.divide(tf.reduce_sum(flatten_labels, axis=1),
-                                     tf.cast(tf.shape(flatten_labels)[1], tf.float32))
-        negative_percent = 1 - positive_percent
-        label_percent = tf.stack([positive_percent, negative_percent], axis=1)
-        balanced_loss2 = balance_factor * tf.reduce_mean(tf.pow(capsule_logits - label_percent, 2))
-
-        tf.add_to_collection('losses', balanced_loss1)
-        # tf.add_to_collection('losses', balanced_loss2)
-        tf.summary.scalar('reconstruction_error', balanced_loss1)
-        tf.summary.scalar('reconstruction_error', balanced_loss2)
+                reuse=False,
+                image=image,
+                balance_factor=0.05))
 
     if self._hparams.verbose:
-      self._summarize_remakes(features, fc_remakes)
+      self._summarize_remakes(features, remakes)
+
+    return remakes
+
+  def _decode(self, features, capsule1_embedding, coupling_coeff):
+
+    capsule1_logits = tf.norm(capsule1_embedding, axis=-1)
+    capsule1_logits_reshaped = tf.reshape(capsule1_logits,
+        [tf.shape(capsule1_logits)[0], self._hparams.num_prime_capsules, 4, 20])
+    capsule1_logits_tiled = tf.tile(
+        tf.expand_dims(capsule1_logits_reshaped, -1),
+        [1, 1, 1, 1, 2])
+
+    coupling_coeff_reshaped = tf.reshape(coupling_coeff,
+        [tf.shape(coupling_coeff)[0], self._hparams.num_prime_capsules, 4, 20, -1])
+
+    class_map = tf.reduce_sum(coupling_coeff_reshaped * capsule1_logits_tiled, 1)
+    label_logits = layers.deconv(features, class_map, False, balance_factor=5)
+    label_2d = tf.argmax(label_logits, axis=3)
 
     return label_2d
 
@@ -236,13 +219,15 @@ class CapsuleModel(model.Model):
     hidden1 = tf.expand_dims(relu1, 1)
 
     # Capsules
-    capsule_output = self._build_capsule(hidden1, features['num_classes'])
-    logits = tf.norm(capsule_output, axis=-1)
+    capsule1_output, capsule2_output, coupling_coeff = self._build_capsule(hidden1, features['num_classes'])
+    logits = tf.norm(capsule2_output, axis=-1)
 
     # Reconstruction
     if self._hparams.remake:
-      remake = self._remake(features, capsule_output)
+      remake = self._remake(features, capsule2_output)
     else:
       remake = None
 
-    return model.Inferred(logits, remake)
+    label_2d = self._decode(features, capsule1_output, coupling_coeff)
+
+    return model.Inferred(logits, label_2d)
