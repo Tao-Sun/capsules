@@ -151,13 +151,13 @@ class Model(object):
     grads = self._average_gradients(tower_grads)
     train_op = self._optimizer.apply_gradients(
         grads, global_step=self._global_step)
-    # summaries = tf.get_collection(tf.GraphKeys.SUMMARIES)
-    # summary = tf.summary.merge(summaries)
+    summaries = tf.get_collection(tf.GraphKeys.SUMMARIES)
+    summary = tf.summary.merge(summaries)
     stacked_targets = tf.stack(targets)
     stacked_predictions = tf.stack(predictions)
     # summed_corrects = tf.reduce_sum(stacked_corrects, 0)
     # summed_almosts = tf.reduce_sum(stacked_almosts, 0)
-    return JoinedResult(None, train_op, stacked_targets, stacked_predictions)
+    return JoinedResult(summary, train_op, stacked_targets, stacked_predictions)
 
   def multi_gpu(self, features, num_gpus):
     """Build the Graph and add the train ops on multiple GPUs.

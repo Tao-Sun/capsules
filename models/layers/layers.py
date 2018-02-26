@@ -367,12 +367,18 @@ def _margin_loss2(recons_image, raw_logits):
     negative_percent = 1 - positive_percent
     percent = tf.stack([positive_percent, negative_percent], axis=1)
 
-    loss = tf.pow(raw_logits - percent, 2)
+    normalized_logits = tf.nn.softmax(raw_logits)
+
+    # raw_logits_print = tf.Print(normalized_logits, [normalized_logits[0]])
+    # percent_print = tf.Print(percent, [percent[0][0]])
+    diff = normalized_logits - percent
+    diff_print = tf.Print(diff, [diff[0]])
+    loss = tf.pow(diff_print, 2)
     print("margin cost shape: " + str(loss.get_shape()))
     return loss
 
 
-def evaluate(logits, remakes, labels, recons_image, num_targets, scope, loss_type, balance_factor=0.05):
+def evaluate(logits, remakes, labels, recons_image, num_targets, scope, loss_type, balance_factor=20):
   """Calculates total loss and performance metrics like accuracy.
 
   Args:
@@ -484,7 +490,7 @@ def reconstruction(capsule_mask, num_atoms, capsule_embedding, layer_sizes,
 
     return reconstruction_2d
 
-def deconv(features, fc_2d, reuse, balance_factor=0.8):
+def deconv(features, fc_2d, reuse, balance_factor=10):
     deconv1 = tf.contrib.layers.conv2d_transpose(
         fc_2d,
         num_outputs=2,
